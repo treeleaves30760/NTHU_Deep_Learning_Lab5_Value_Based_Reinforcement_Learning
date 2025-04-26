@@ -1,4 +1,6 @@
+# All pdf files
 *.pdf
 
+# All conda and venv
 .conda
 .venv
