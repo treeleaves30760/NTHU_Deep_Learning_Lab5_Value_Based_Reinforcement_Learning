@@ -1,0 +1,8 @@
+gymnasium
+opencv-python
+ale-py
+torch
+torchvision
+numpy
+wandb
+
