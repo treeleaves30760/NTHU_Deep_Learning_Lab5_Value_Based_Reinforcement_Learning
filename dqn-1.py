@@ -16,6 +16,7 @@ from collections import deque
 import wandb
 import argparse
 import time
+import datetime
 
 gym.register_envs(ale_py)
 
@@ -68,6 +69,9 @@ class DQN(nn.Module):
         # Simple normalization for CartPole
         if self.network_type == "mlp":
             x = x.view(-1, self.input_dim)
+        elif self.network_type == "cnn":
+            # Normalize pixel values for CNN
+            x = x / 255.0
         return self.network(x)
 
 
@@ -91,13 +95,13 @@ class AtariPreprocessor:
 
     def reset(self, obs):
         frame = self.preprocess(obs)
-        self.frames = deque([frame for _ in range(
+        self.frames = deque([frame.copy() for _ in range(
             self.frame_stack)], maxlen=self.frame_stack)
         return np.stack(self.frames, axis=0)
 
     def step(self, obs):
         frame = self.preprocess(obs)
-        self.frames.append(frame)
+        self.frames.append(frame.copy())  # Use copy to avoid reference issues
         return np.stack(self.frames, axis=0)
 
 
@@ -151,8 +155,14 @@ class PrioritizedReplayBuffer:
 
 class DQNAgent:
     def __init__(self, env_name="CartPole-v1", args=None):
-        self.env = gym.make(env_name, render_mode="rgb_array")
-        self.test_env = gym.make(env_name, render_mode="rgb_array")
+        # For Atari, use NoFrameskip version of the environment
+        if "NoFrameskip" in env_name:
+            self.env = gym.make(env_name, render_mode="rgb_array")
+            self.test_env = gym.make(env_name, render_mode="rgb_array")
+        else:
+            self.env = gym.make(env_name, render_mode="rgb_array")
+            self.test_env = gym.make(env_name, render_mode="rgb_array")
+
         self.num_actions = self.env.action_space.n
         self.env_name = env_name
 
@@ -163,12 +173,14 @@ class DQNAgent:
             self.input_shape = self.env.observation_space.shape
             # For CartPole, use a smaller replay buffer and start training sooner
             self.replay_start_size = min(args.replay_start_size, 1000)
+            self.clip_rewards = False
         else:
             # Atari or other visual environments
             self.network_type = "cnn"
             self.input_shape = (4, 84, 84)  # Standard for Atari with 4 frames
             self.preprocessor = AtariPreprocessor()
             self.replay_start_size = args.replay_start_size
+            self.clip_rewards = True  # Clip rewards for Atari
 
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu")
@@ -240,6 +252,10 @@ class DQNAgent:
                 next_obs, reward, terminated, truncated, _ = self.env.step(
                     action)
                 done = terminated or truncated
+
+                # Clip rewards for Atari games (standard practice)
+                if self.clip_rewards:
+                    reward = np.sign(reward)  # -1, 0, 1
 
                 if self.network_type == "cnn":
                     next_state = self.preprocessor.step(next_obs)
@@ -331,7 +347,7 @@ class DQNAgent:
             next_obs, reward, terminated, truncated, _ = self.test_env.step(
                 action)
             done = terminated or truncated
-            total_reward += reward
+            total_reward += reward  # Don't clip rewards during evaluation
 
             if self.network_type == "cnn":
                 state = self.preprocessor.step(next_obs)
@@ -430,6 +446,7 @@ if __name__ == "__main__":
                         default=500)  # CartPole default max steps
     parser.add_argument("--train-per-step", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--env-name", type=str, default="CartPole-v1")
     args = parser.parse_args()
 
     # Set seed for reproducibility
@@ -437,7 +454,16 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    wandb.init(project="DLP-Lab5-DQN-CartPole",
-               name=args.wandb_run_name, save_code=True)
-    agent = DQNAgent(args=args)
+    # Create timestamped directory for saving results
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    save_dir = os.path.join(args.save_dir, timestamp)
+    os.makedirs(save_dir, exist_ok=True)
+    args.save_dir = save_dir
+
+    wandb.init(project="DLP-Lab5-DQN",
+               name=f"{args.env_name}-{args.wandb_run_name}",
+               save_code=True,
+               config=vars(args))
+
+    agent = DQNAgent(env_name=args.env_name, args=args)
     agent.run()
