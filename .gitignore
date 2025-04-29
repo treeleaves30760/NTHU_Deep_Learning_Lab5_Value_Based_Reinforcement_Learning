@@ -4,3 +4,13 @@
 # All conda and venv
 .conda
 .venv
+
+# All pycache
+__pycache__
+
+# Run results
+results/
+eval_videos/
+
+# All logs
+wandb/
